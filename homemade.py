@@ -9,6 +9,7 @@ import random
 from lib.engine_wrapper import MinimalEngine
 from lib.types import MOVE, HOMEMADE_ARGS_TYPE
 import logging
+from engines.maydan_engine import MaydanEngine
 
 
 # Use this logger variable to print messages to the console or log files.
