@@ -61,23 +61,26 @@ def pawns_score(board: chess.Board) -> float:
 def heuristic(board: chess.Board) -> float:
     val = 0.0
     val += material_balance(board)
-    val += activity_score(board)
+    # val += activity_score(board)
     # val += pawns_score(board)
     return val
 
 
 
-def max_value(node: chess.Board, depth: int, alpha: float, beta: float) -> float:
-    if depth == 0 or node.is_game_over():
+def max_value(node: chess.Board, depth: int, time_in_qsearch: int, alpha: float, beta: float) -> float:
+    capture_moves = [move for move in node.legal_moves if node.is_capture(move)]
+    if depth < 0 or (depth == 0 and len(capture_moves) == 0) or node.is_game_over():
         if node.is_checkmate():
             return float("-inf")
         return heuristic(node)
+    if depth == 0 and len(capture_moves) > 0:
+        time_in_qsearch += 1
     rv = float("-inf")
-    for move in sorted_moves(node):
-        new_depth = quiescence_search(node, move, depth)
-        node.push(move)
+    for move in sorted_moves(node, depth):
         MaydanEngine.num_evaluated_nodes += 1
-        cv = min_value(node, new_depth, alpha, beta)
+        node.push(move)
+        new_depth = q_search(node, depth, time_in_qsearch)
+        cv = min_value(node, new_depth, time_in_qsearch, alpha, beta)
         node.pop()
         rv = max(rv, cv)
         if rv >= beta:
@@ -86,17 +89,20 @@ def max_value(node: chess.Board, depth: int, alpha: float, beta: float) -> float
     return rv
 
 
-def min_value(node: chess.Board, depth: int, alpha: float, beta: float) -> float:
-    if depth == 0 or node.is_game_over():
+def min_value(node: chess.Board, depth: int, time_in_qsearch: int, alpha: float, beta: float) -> float:
+    capture_moves = [move for move in node.legal_moves if node.is_capture(move)]
+    if depth < 0 or (depth == 0 and len(capture_moves) == 0) or node.is_game_over():
         if node.is_checkmate():
             return float("inf")
         return heuristic(node)
+    if depth == 0 and len(capture_moves) > 0:
+        time_in_qsearch += 1
     rv = float("inf")
-    for move in sorted_moves(node):
-        new_depth = quiescence_search(node, move, depth)
-        node.push(move)
+    for move in sorted_moves(node, depth):
         MaydanEngine.num_evaluated_nodes += 1
-        cv = max_value(node, new_depth, alpha, beta)
+        node.push(move)
+        new_depth = q_search(node, depth, time_in_qsearch)
+        cv = max_value(node, new_depth, time_in_qsearch, alpha, beta)
         node.pop()
         rv = min(rv, cv)
         if rv <= alpha:
@@ -105,36 +111,50 @@ def min_value(node: chess.Board, depth: int, alpha: float, beta: float) -> float
     return rv
 
 
-def quiescence_search(node: chess.Board, move: chess.Move, depth: int) -> int:
-    # if node.is_capture(move):
-    #     to_square = move.to_square
-    #     white_protectors = len(node.attackers(chess.WHITE, to_square))
-    #     black_protectors = len(node.attackers(chess.BLACK, to_square))
-    #     # the idea is to only increase the depth if the capture is "unprotected"
-    #     # meaning you don't have enough pieces to capture back after the entire sequence
-    #     if white_protectors != black_protectors:
-    #         return depth
-    #     return depth - 1
-    # if node.gives_check(move):
-    #     return depth
+def q_search(node: chess.Board, depth: int, time_in_qsearch: int) -> int:
+    # capture_moves = [move for move in node.legal_moves if node.is_capture(move)]
+    # if depth == 0:
+    #     if time_in_qsearch > MaydanEngine.max_time_in_qsearch or len(capture_moves) == 0:
+    #         return -1
+    #     return 0
     return depth - 1
 
 
-def sorted_moves(board: chess.Board):
-    legal_moves = list(board.legal_moves)
-
+def sort_capture_moves(board: chess.Board, capture_moves: list[chess.Move]) -> list[chess.Move]:
+    if len(capture_moves) == 0:
+        return capture_moves
+    
     def move_priority(move):
-        if board.gives_check(move):
-            return 0  # Highest priority: Check
-        elif board.is_capture(move):
-            return 1  # Second priority: Capture
-        elif board.is_attacked_by(board.turn, move.to_square):
-            return 2  # Third priority: Threat
-        else:
-            return 3  # Lowest priority: Other moves
+        capturing_piece: chess.Piece = board.piece_at(move.from_square)
+        capturing_value = MaydanEngine.piece_value[capturing_piece.piece_type]
 
-    legal_moves.sort(key=move_priority)
-    return legal_moves
+        if board.is_en_passant(move):
+            captured_value = MaydanEngine.piece_value[chess.PAWN]
+        else:
+            captured_piece: chess.Piece = board.piece_at(move.to_square)
+            captured_value = MaydanEngine.piece_value[captured_piece.piece_type]
+
+        # lower number is when captured value is higher than capturing value (this is a GOOD capture)
+        # think capturing is pawn and captured is queen
+        # this results in 1 - 9 = -8 (the BEST kind of capture)
+        return capturing_value - captured_value
+
+    capture_moves.sort(key=move_priority)
+    return capture_moves
+
+
+def sorted_moves(board: chess.Board, depth: int) -> list[chess.Move]:
+    legal_moves = list(board.legal_moves)
+    if depth == 0:
+        return sort_capture_moves(board, [move for move in legal_moves if board.is_capture(move)])
+    
+    pure_check_moves = [move for move in legal_moves if board.gives_check(move) and not board.is_capture(move)]
+    capture_moves = [move for move in legal_moves if board.is_capture(move)]
+    capture_moves = sort_capture_moves(board, capture_moves)
+    rest_moves = [move for move in legal_moves if not board.gives_check(move) and not board.is_capture(move)]
+
+    
+    return pure_check_moves + capture_moves + rest_moves
 
 
 class MaydanEngine(MinimalEngine):
@@ -151,7 +171,11 @@ class MaydanEngine(MinimalEngine):
     maximizer_mapping = {chess.WHITE: 1, chess.BLACK: -1}
     color_indexing = {chess.WHITE: 1, chess.BLACK: -1}
 
+    piece_value = {chess.KING: 0, chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3.25, chess.ROOK: 5, chess.QUEEN: 9}
+
     num_evaluated_nodes = 0
+
+    max_time_in_qsearch = 3
 
     def __init__(self, commands: COMMANDS_TYPE, options: OPTIONS_GO_EGTB_TYPE, stderr: Optional[int],
                  draw_or_resign: Configuration, game: Optional[model.Game] = None, name: Optional[str] = None,
@@ -193,14 +217,12 @@ class MaydanEngine(MinimalEngine):
         alpha = float("-inf")
         beta = float("inf")
         best_move = None
-        for move in sorted_moves(board):
-
-
-            new_depth = quiescence_search(board, move, depth)
+        for move in sorted_moves(board, depth):
             
 
             board.push(move)
-            cv = min_value(board, new_depth, alpha, beta)
+            new_depth = q_search(board, depth, 0)
+            cv = min_value(board, new_depth, 0, alpha, beta)
             board.pop()
 
 
